@@ -23,11 +23,14 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     openai_api_key: str = ""
 
-    # Groq primary; we keep a fallback chain for rate-limit / outage handling.
-    groq_model: str = "llama-3.3-70b-versatile"
+    # gpt-oss-120b is OpenAI's open-weights model on Groq, trained for the
+    # OpenAI tool-call format. llama-3.3-70b emits malformed <function=name {...}>
+    # blobs on multi-tool prompts and Groq's server rejects them — confirmed
+    # in production. Don't change this unless you've tested tool-calling.
+    groq_model: str = "openai/gpt-oss-120b"
     groq_fallback_models: list[str] = Field(
         default_factory=lambda: [
-            "llama-3.1-70b-versatile",
+            "openai/gpt-oss-20b",
             "llama-3.1-8b-instant",
         ]
     )
