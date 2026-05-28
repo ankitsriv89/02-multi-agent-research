@@ -1,0 +1,44 @@
+# ─── UI ───────────────────────────────────────────────────────────────────────
+streamlit==1.41.1           # Chat UI + live agent-trace pane
+
+# ─── Agent Frameworks ─────────────────────────────────────────────────────────
+# LangGraph 1.x — graph-based explicit state machines.
+# Pairs with langchain.agents.create_agent (the v1 successor to
+# langgraph.prebuilt.create_react_agent, which is now deprecated).
+langgraph==1.2.2
+langchain==1.3.2
+langchain-core>=1.0.0       # transitive but pinned-ish to keep agents API stable
+
+# AutoGen v0.4 line — actual package version is 0.7.x.
+# Conversation-driven multi-agent groups (SelectorGroupChat).
+autogen-agentchat==0.7.5
+autogen-ext[openai]==0.7.5  # OpenAIChatCompletionClient for model wiring
+
+# ─── LLM Providers ────────────────────────────────────────────────────────────
+# Same provider mix as Project 1 — Groq primary (fast/cheap), OpenAI fallback.
+langchain-groq==1.1.2
+langchain-openai==1.2.2
+openai==2.38.0
+groq==0.37.1                # 0.x line is what langchain-groq 1.1.2 requires
+
+# ─── Tools ────────────────────────────────────────────────────────────────────
+langchain-tavily==0.2.18    # Tavily search (LLM-optimized web search)
+httpx==0.28.1               # Async HTTP for the web-fetch tool
+beautifulsoup4==4.14.2      # HTML → clean text for fetched pages
+readability-lxml==0.8.4.1   # Strip boilerplate from fetched articles
+lxml==6.0.2
+
+# ─── Config & Validation ──────────────────────────────────────────────────────
+pydantic==2.13.4
+pydantic-settings==2.14.1
+python-dotenv==1.2.2
+
+# ─── Observability ────────────────────────────────────────────────────────────
+loguru==0.7.3
+tenacity==9.1.4
+
+# ─── Testing ──────────────────────────────────────────────────────────────────
+pytest==8.4.2
+pytest-asyncio==0.25.3
+pytest-mock==3.15.1
+respx==0.22.0               # mock httpx for web-fetch tests
