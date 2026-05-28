@@ -73,7 +73,14 @@ def build_team() -> SelectorGroupChat:
         tools=[web_search, web_fetch],
         system_message=RESEARCHER_SYS,
         description="Calls web tools to gather sources. Speaks after the planner.",
-        reflect_on_tool_use=True,
+        # reflect_on_tool_use=True forces a final "summarize" turn with
+        # tool_choice="none". gpt-oss-120b on Groq sometimes ignores that
+        # constraint and emits another tool call → Groq returns HTTP 400
+        # tool_use_failed and the whole run crashes. We don't need the
+        # reflection because the Writer agent already summarizes the
+        # researcher's notes downstream. Leaving it off lets the researcher
+        # iterate tools→text→tools naturally and terminate on its own.
+        reflect_on_tool_use=False,
     )
     writer = AssistantAgent(
         name="writer",
@@ -161,4 +168,13 @@ async def run_research(query: str) -> AsyncIterator[StreamEvent]:
             )
         yield StreamEvent(type="done")
     except Exception as e:
+        # If the Writer had already produced something before the crash
+        # (typical with downstream Critic failures), salvage it as the
+        # final report so the user keeps the work done so far.
+        if last_writer_text:
+            yield StreamEvent(
+                type="final",
+                content=last_writer_text,
+                citations=citations[:10],
+            )
         yield StreamEvent(type="error", content=str(e))
