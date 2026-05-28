@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 import streamlit as st
@@ -160,7 +161,6 @@ with trace_col:
 with report_col:
     st.markdown("### Report")
     report_container = st.container()
-    citations_container = st.container()
 
 # State we accumulate as events stream in.
 events: list = []
@@ -170,6 +170,7 @@ final_text = ""
 final_citations: list = []
 error_text: str | None = None
 start = time.perf_counter()
+elapsed = 0.0
 
 
 _AGENT_EMOJI = {
@@ -227,18 +228,11 @@ def _render_event(ev: "StreamEvent") -> None:
                 st.markdown(ev.content or "_(no content)_")
 
     elif ev.type == "final":
+        # Capture only — the pretty report + download buttons are rendered
+        # in one shot after the stream completes so the layout doesn't
+        # reshuffle as events arrive.
         final_text = ev.content or ""
         final_citations = ev.citations or []
-        with report_container:
-            st.markdown(final_text)
-        with citations_container:
-            if final_citations:
-                st.markdown("---")
-                st.markdown("### Sources")
-                for i, c in enumerate(final_citations, 1):
-                    title = c.title if hasattr(c, "title") else c.get("title", c.get("url"))
-                    url = c.url if hasattr(c, "url") else c.get("url")
-                    st.markdown(f"[{i}] [{title}]({url})")
 
     elif ev.type == "error":
         error_text = ev.content or "Unknown error"
@@ -263,3 +257,70 @@ try:
 except Exception as e:
     status.update(label="Crashed", state="error")
     st.exception(e)
+
+
+# ── Pretty report + downloads ────────────────────────────────────────────────
+# Built in one shot AFTER the stream completes so the layout doesn't
+# reshuffle as events arrive. PDF bytes are generated eagerly — Streamlit's
+# download_button has no lazy callback, the data must be ready when rendered.
+if final_text:
+    from app.config import get_settings
+    from app.report import (
+        build_report_metadata,
+        render_report_html,
+        render_report_markdown,
+        render_report_pdf,
+        slugify_query,
+    )
+
+    _settings = get_settings()
+    _model_in_use = (
+        _settings.groq_model
+        if _settings.llm_provider == "groq"
+        else _settings.openai_model
+    )
+    metadata = build_report_metadata(
+        query=query,
+        framework=framework,
+        model=_model_in_use,
+        elapsed_s=elapsed,
+        agent_count=len(current_turn),
+        source_count=len(final_citations),
+    )
+    report_html = render_report_html(metadata, final_text, final_citations)
+
+    with report_container:
+        # On-screen pretty render — same HTML the PDF uses.
+        st.html(report_html)
+
+        slug = slugify_query(query)
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        col_pdf, col_md, _spacer = st.columns([1, 1, 2])
+        with col_pdf:
+            try:
+                pdf_bytes = render_report_pdf(report_html)
+                st.download_button(
+                    "📄 Download PDF",
+                    data=pdf_bytes,
+                    file_name=f"research-{slug}-{date_str}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as pdf_err:  # noqa: BLE001
+                # WeasyPrint can fail on missing system libs at runtime.
+                # Show a friendly message instead of crashing the whole UI;
+                # the markdown export still works.
+                st.button(
+                    "📄 PDF unavailable",
+                    disabled=True,
+                    use_container_width=True,
+                    help=f"PDF generation failed: {pdf_err}",
+                )
+        with col_md:
+            st.download_button(
+                "⬇️ Download Markdown",
+                data=render_report_markdown(metadata, final_text, final_citations),
+                file_name=f"research-{slug}-{date_str}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )

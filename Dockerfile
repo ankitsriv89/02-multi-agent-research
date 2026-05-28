@@ -9,9 +9,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# lxml + readability-lxml need libxml2/libxslt at runtime.
+# lxml + readability-lxml: libxml2/libxslt
+# weasyprint: cairo, pango, harfbuzz, fontconfig + fallback fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libxml2 libxslt1.1 gcc libxml2-dev libxslt1-dev \
+        libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfontconfig1 \
+        libcairo2 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # HF Spaces requires a non-root user named "user" with UID 1000.

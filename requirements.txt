@@ -28,6 +28,12 @@ beautifulsoup4==4.14.2      # HTML → clean text for fetched pages
 readability-lxml==0.8.4.1   # Strip boilerplate from fetched articles
 lxml==6.0.2
 
+# ─── Report rendering / export ────────────────────────────────────────────────
+markdown==3.10.2            # Markdown → HTML for the pretty report
+weasyprint==68.1            # HTML → PDF for the Download PDF button.
+                            # Needs Cairo, Pango, GObject, fontconfig at runtime
+                            # (see Dockerfile for the apt-get packages).
+
 # ─── Config & Validation ──────────────────────────────────────────────────────
 pydantic==2.13.4
 pydantic-settings==2.14.1
