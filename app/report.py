@@ -15,8 +15,60 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from urllib.parse import urlparse
 
+import bleach
 import markdown as md
+
+
+# ── Allowlists for HTML sanitization ─────────────────────────────────────────
+# The report body comes from an LLM that has just read arbitrary web pages,
+# which is a prompt-injection vector: a hostile page can manipulate the LLM
+# into emitting <script>, <iframe>, javascript: URIs, etc. We render the
+# resulting HTML in two destinations that BOTH execute it:
+#   • st.html() in the user's browser (XSS)
+#   • WeasyPrint, which can fetch <img src=...> etc. (SSRF, see render_report_pdf)
+# Hence the strict allowlist below. Anything not listed is escaped.
+
+_ALLOWED_TAGS: frozenset[str] = frozenset({
+    # Block elements the Writer actually uses.
+    "p", "h1", "h2", "h3", "h4", "h5", "h6",
+    "ul", "ol", "li",
+    "blockquote", "pre", "code",
+    "table", "thead", "tbody", "tr", "th", "td",
+    "hr", "br",
+    # Inline formatting.
+    "strong", "b", "em", "i", "u", "s", "del", "ins", "sub", "sup",
+    "a", "span",
+})
+_ALLOWED_ATTRS: dict[str, list[str]] = {
+    "a": ["href", "title"],
+    "th": ["align"],
+    "td": ["align"],
+    # No "src" anywhere — blocks <img> entirely, which also kills the SSRF
+    # surface inside the body. Citation URLs render as <a href>, not images.
+}
+_ALLOWED_SCHEMES: list[str] = ["http", "https", "mailto"]
+
+
+def _sanitize_body_html(html: str) -> str:
+    return bleach.clean(
+        html,
+        tags=_ALLOWED_TAGS,
+        attributes=_ALLOWED_ATTRS,
+        protocols=_ALLOWED_SCHEMES,
+        strip=True,
+        strip_comments=True,
+    )
+
+
+def _is_safe_url(raw_url: str) -> bool:
+    """True only if the URL has an http(s) or mailto scheme."""
+    try:
+        scheme = urlparse(raw_url).scheme.lower()
+    except Exception:
+        return False
+    return scheme in {"http", "https", "mailto"}
 
 
 # ── Slug ─────────────────────────────────────────────────────────────────────
@@ -234,6 +286,10 @@ def _sources_html(citations: list) -> str:
         if not raw_url:
             continue
         url = str(raw_url)
+        # Block javascript:/data:/vbscript: URIs — these come from regex-mined
+        # text in tool messages, an attacker-controlled surface.
+        if not _is_safe_url(url):
+            continue
         raw_title = (
             getattr(c, "title", None) if not isinstance(c, dict) else c.get("title")
         )
@@ -274,11 +330,14 @@ def render_report_html(
     render (via `st.html()` in the Streamlit layer).
     """
     body_md = _strip_inline_sources(body_markdown or "")
-    body_html = md.markdown(
+    raw_body_html = md.markdown(
         body_md,
         extensions=["extra", "sane_lists", "smarty"],
         output_format="html",
     )
+    # Sanitize before substituting into the template. See _ALLOWED_TAGS for
+    # the rationale — this html is rendered by both st.html() and WeasyPrint.
+    body_html = _sanitize_body_html(raw_body_html)
     return _HTML_TEMPLATE.format(
         title_escaped=_escape(metadata["title"]),
         framework_label_escaped=_escape(metadata["framework_label"]),
@@ -292,15 +351,28 @@ def render_report_html(
 
 
 # ── PDF ──────────────────────────────────────────────────────────────────────
+def _block_all_url_fetcher(url: str, timeout: int = 10, ssl_context=None) -> dict:
+    """WeasyPrint url_fetcher that refuses every outbound fetch.
+
+    Prevents SSRF: WeasyPrint would otherwise fetch <img src=...> etc.,
+    which on cloud hosts could hit metadata endpoints (169.254.169.254 etc.)
+    or internal services. We embed all our CSS in <style> tags, so there
+    are no legitimate fetches to make.
+    """
+    return {"string": b"", "mime_type": "text/plain"}
+
+
 def render_report_pdf(html: str) -> bytes:
     """Convert the report HTML into PDF bytes via WeasyPrint.
 
     Imported lazily because WeasyPrint pulls in heavy native libs at import
     time; tests that don't touch PDF generation should not pay that cost.
+
+    The `url_fetcher` blocks every outbound network fetch (SSRF mitigation).
     """
     from weasyprint import HTML  # noqa: PLC0415  (intentional lazy import)
 
-    return HTML(string=html).write_pdf()
+    return HTML(string=html, url_fetcher=_block_all_url_fetcher).write_pdf()
 
 
 # ── Markdown export ──────────────────────────────────────────────────────────
@@ -324,15 +396,21 @@ def render_report_markdown(
         body_md,
     ]
     if citations:
-        lines.extend(["", "## Sources", ""])
-        for i, c in enumerate(citations, 1):
+        safe_citations = []
+        for c in citations:
             raw_url = getattr(c, "url", None) if not isinstance(c, dict) else c.get("url")
             if not raw_url:
                 continue
             url = str(raw_url)
+            if not _is_safe_url(url):
+                continue
             raw_title = (
                 getattr(c, "title", None) if not isinstance(c, dict) else c.get("title")
             )
             title = str(raw_title) if raw_title else url
-            lines.append(f"{i}. [{title}]({url})")
+            safe_citations.append((url, title))
+        if safe_citations:
+            lines.extend(["", "## Sources", ""])
+            for i, (url, title) in enumerate(safe_citations, 1):
+                lines.append(f"{i}. [{title}]({url})")
     return "\n".join(lines) + "\n"

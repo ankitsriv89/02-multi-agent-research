@@ -176,3 +176,103 @@ def test_render_report_markdown_drops_writer_inline_sources():
     assert "Real body." in out
     assert "duplicate.example.com" not in out
     assert "kept.example.com" in out
+
+
+# ── Security: HTML sanitization (XSS) ───────────────────────────────────────
+# The researcher reads arbitrary web pages, so a hostile page can prompt-inject
+# the writer into emitting malicious HTML. These regressions confirm the
+# sanitizer strips/escapes the relevant attack shapes.
+def test_html_sanitizer_strips_script_tags():
+    body = "Hello <script>alert('xss')</script> world."
+    html = render_report_html(_meta(), body, [])
+    assert "<script" not in html.lower()
+    assert "alert('xss')" not in html
+    assert "Hello" in html  # benign text survives
+
+
+def test_html_sanitizer_strips_iframe_and_object():
+    body = (
+        "Before "
+        "<iframe src='https://evil.example.com/'></iframe>"
+        "<object data='https://evil.example.com/'></object>"
+        " after"
+    )
+    html = render_report_html(_meta(), body, [])
+    assert "<iframe" not in html.lower()
+    assert "<object" not in html.lower()
+
+
+def test_html_sanitizer_strips_onerror_attribute():
+    # An <img> would normally render fine; we also strip <img> entirely
+    # (no "src" attribute in the allowlist) which also closes the SSRF
+    # surface inside the report body. Belt-and-braces.
+    body = "<img src='x' onerror='alert(1)'>"
+    html = render_report_html(_meta(), body, [])
+    assert "onerror" not in html.lower()
+    assert "<img" not in html.lower()
+
+
+def test_html_sanitizer_blocks_javascript_uri_in_body_link():
+    # markdown converts [text](url) to <a href="url">text</a>; the sanitizer
+    # must drop href when it's not http/https/mailto.
+    body = "Click [here](javascript:alert(1)) please."
+    html = render_report_html(_meta(), body, [])
+    assert "javascript:" not in html.lower()
+
+
+def test_html_sanitizer_preserves_safe_https_link():
+    body = "See [the docs](https://example.com/page)."
+    html = render_report_html(_meta(), body, [])
+    assert 'href="https://example.com/page"' in html
+
+
+# ── Security: citation URL scheme allowlist ─────────────────────────────────
+def test_citation_javascript_url_dropped_from_html():
+    citations = [
+        Citation(url="javascript:alert(1)", title="Click me"),
+        Citation(url="https://good.example.com", title="Real source"),
+    ]
+    html = render_report_html(_meta(), "body", citations)
+    assert "javascript:" not in html.lower()
+    assert "Click me" not in html  # the whole list item is dropped
+    assert "https://good.example.com" in html
+
+
+def test_citation_data_url_dropped_from_html():
+    citations = [Citation(url="data:text/html;base64,PHNjcmlwdD4=", title="x")]
+    html = render_report_html(_meta(), "body", citations)
+    # No <footer> element should render when every citation is unsafe.
+    assert "<footer" not in html
+
+
+def test_citation_javascript_url_dropped_from_markdown_export():
+    citations = [
+        Citation(url="javascript:alert(1)", title="bad"),
+        Citation(url="https://good.example.com", title="good"),
+    ]
+    out = render_report_markdown(_meta(), "body", citations)
+    assert "javascript:" not in out
+    assert "https://good.example.com" in out
+
+
+def test_citation_mailto_allowed():
+    citations = [Citation(url="mailto:admin@example.com", title="Contact")]
+    html = render_report_html(_meta(), "body", citations)
+    assert 'href="mailto:admin@example.com"' in html
+
+
+# ── Security: WeasyPrint url_fetcher blocks SSRF ────────────────────────────
+def test_weasyprint_url_fetcher_returns_empty_for_any_url():
+    # Direct test of the fetcher callback — proves no real network call
+    # could ever leak through to a metadata endpoint or internal host.
+    from app.report import _block_all_url_fetcher  # noqa: PLC0415
+
+    for hostile in [
+        "http://169.254.169.254/latest/meta-data/",   # AWS metadata
+        "http://metadata.google.internal/",            # GCP metadata
+        "http://127.0.0.1:8000/admin",                 # localhost pivot
+        "file:///etc/passwd",                          # file scheme
+        "https://attacker.example.com/exfil",          # external exfil
+    ]:
+        result = _block_all_url_fetcher(hostile)
+        assert result == {"string": b"", "mime_type": "text/plain"}

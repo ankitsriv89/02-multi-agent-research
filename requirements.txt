@@ -30,6 +30,10 @@ lxml==6.0.2
 
 # ─── Report rendering / export ────────────────────────────────────────────────
 markdown==3.10.2            # Markdown → HTML for the pretty report
+bleach==6.3.0               # Sanitize the markdown HTML before rendering — the
+                            # researcher reads arbitrary web pages so prompt
+                            # injection could put <script>/javascript: in the
+                            # writer's output. See app/report.py allowlist.
 weasyprint==68.1            # HTML → PDF for the Download PDF button.
                             # Needs Cairo, Pango, GObject, fontconfig at runtime
                             # (see Dockerfile for the apt-get packages).
